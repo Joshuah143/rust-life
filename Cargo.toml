@@ -1,0 +1,13 @@
+[package]
+name = "life"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ggez = "0.9.3"
+rand = "0.8.5"
+
+[profile.release]
+opt-level = 3
+lto = true 
+codegen-units = 1  
