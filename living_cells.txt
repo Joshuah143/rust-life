@@ -1,3 +1,6 @@
-1 2
-2 2
-3 3
+# This is an example cells.txt file, with a glider
+10 10
+10 11
+10 12
+9 12
+8 11

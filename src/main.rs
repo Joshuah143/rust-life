@@ -1,16 +1,15 @@
 use ggez::{Context, ContextBuilder, GameResult};
 use ggez::graphics::{self, Color};
-use ggez::event::{self, EventHandler};
+use ggez::event::{self, EventHandler, MouseButton};
 
 const X_SIZE_CELLS: i32 = 200;
 const Y_SIZE_CELLS: i32 = 180;
 const CELL_SIZE: i32 = 10;
-const DESIRED_FPS: u32 = 20;
+const DESIRED_FPS: u32 = 5;
 const LOAD_PATH: &str = "living_cells.txt";
-const FUZZY: f32 = 0.5; // amount to fuzz from loaded cells
+const FUZZY: f32 = 0.0; // amount to fuzz from loaded cells
 
 fn main() {
-    // Make a Context.
     let (mut ctx, event_loop) = ContextBuilder::new("Life", "Joshua Himmens")
         .window_setup(ggez::conf::WindowSetup::default().title("Life"))
         .window_mode(ggez::conf::WindowMode::default()
@@ -27,19 +26,19 @@ fn main() {
 
 struct GameOfLife {
     cells: Vec<Vec<bool>>,
+    prev_cells: Vec<Vec<bool>>,
     max_fps: u32,
     n_ticks: u32,
     paused: bool,
-    cell_mesh: graphics::Mesh,
+    living_mesh: graphics::Mesh,
+    dead_mesh: graphics::Mesh,
+    mouse_down: bool,
 }
 
 impl GameOfLife {
     pub fn new(ctx: &mut Context) -> GameOfLife {
-        let mut initial_cells: Vec<Vec<bool>> = vec![vec![false; (X_SIZE_CELLS) as usize]; (Y_SIZE_CELLS) as usize];
-        for (cell_x, cell_y) in load_cells_from_file(LOAD_PATH) {
-            initial_cells[(cell_y) as usize][(cell_x) as usize] = true;
-        }
-
+        let mut initial_cells: Vec<Vec<bool>> = load_cells_from_file(LOAD_PATH);
+        
         // Fuzz the cells a bit
         for y in 0..(Y_SIZE_CELLS) {
             for x in 0..(X_SIZE_CELLS) {
@@ -51,15 +50,20 @@ impl GameOfLife {
         }
         
         let rect = graphics::Rect::new(0.0, 0.0, CELL_SIZE as f32, CELL_SIZE as f32);
-        let cell_mesh = graphics::Mesh::new_rectangle(ctx, graphics::DrawMode::fill(), rect, Color::BLACK)
+        let living_mesh = graphics::Mesh::new_rectangle(ctx, graphics::DrawMode::fill(), rect, Color::BLACK)
+            .expect("Failed to create cell mesh");
+        let dead_mesh = graphics::Mesh::new_rectangle(ctx, graphics::DrawMode::fill(), rect, Color::WHITE)
             .expect("Failed to create cell mesh");
 
         GameOfLife {
             cells: initial_cells,
+            prev_cells: load_cells_from_file(""),
             max_fps: DESIRED_FPS,
             n_ticks: 0,
             paused: true,
-            cell_mesh,
+            living_mesh,
+            dead_mesh,
+            mouse_down: false,
         }
     }
 
@@ -97,15 +101,37 @@ impl GameOfLife {
     }
 
     fn draw_grid(&self, ctx: &mut Context) -> GameResult {
-        let mut canvas = graphics::Canvas::from_frame(ctx, Color::WHITE);
+        // do not set the background color here, it should come from the current frame
+        let mut canvas = graphics::Canvas::from_frame(ctx, None);
 
-        for y in 0..(Y_SIZE_CELLS) {
-            for x in 0..(X_SIZE_CELLS) {
-                if self.cells[y as usize][x as usize] {
+        // First frame - draw everything
+        if self.n_ticks == 0 {
+            for y in 0..(Y_SIZE_CELLS) {
+                for x in 0..(X_SIZE_CELLS) {
                     let draw_params = graphics::DrawParam::default()
                         .dest([x as f32 * CELL_SIZE as f32, y as f32 * CELL_SIZE as f32]);
                     
-                    canvas.draw(&self.cell_mesh, draw_params);
+                    if self.cells[y as usize][x as usize] {
+                        canvas.draw(&self.living_mesh, draw_params);
+                    } else {
+                        canvas.draw(&self.dead_mesh, draw_params);
+                    }
+                }
+            }
+        } else {
+            // Subsequent frames - only draw cells that changed
+            for y in 0..(Y_SIZE_CELLS) {
+                for x in 0..(X_SIZE_CELLS) {
+                    if self.prev_cells[y as usize][x as usize] != self.cells[y as usize][x as usize] {
+                        let draw_params = graphics::DrawParam::default()
+                            .dest([x as f32 * CELL_SIZE as f32, y as f32 * CELL_SIZE as f32]);
+                        
+                        if self.cells[y as usize][x as usize] {
+                            canvas.draw(&self.living_mesh, draw_params);
+                        } else {
+                            canvas.draw(&self.dead_mesh, draw_params);
+                        }
+                    }
                 }
             }
         }
@@ -117,8 +143,13 @@ impl GameOfLife {
 impl EventHandler for GameOfLife {
     fn update(&mut self, ctx: &mut Context) -> GameResult {
         if ctx.time.check_update_time(self.max_fps) && !self.paused {
+            self.prev_cells = self.cells.clone();
             self.cells = self.compute_next_generation();
         }
+        
+        // print frame rate
+        let fps = ctx.time.fps();
+        ctx.gfx.set_window_title(&format!("Life - FPS: {:.0}", fps));
         
         Ok(())
     }
@@ -129,6 +160,36 @@ impl EventHandler for GameOfLife {
         }
         Ok(())
     }
+    
+    fn mouse_button_down_event(&mut self, _ctx: &mut Context, button: MouseButton, x: f32, y: f32) -> GameResult {
+        if button == MouseButton::Left {
+            self.mouse_down = true;
+            let x = (x / CELL_SIZE as f32).floor() as i32;
+            let y = (y / CELL_SIZE as f32).floor() as i32;
+            if x >= 0 && x < X_SIZE_CELLS && y >= 0 && y < Y_SIZE_CELLS {
+                self.cells[y as usize][x as usize] = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn mouse_button_up_event(&mut self, _ctx: &mut Context, button: MouseButton, _x: f32, _y: f32) -> GameResult {
+        if button == MouseButton ::Left {
+            self.mouse_down = false;
+        }
+        Ok(())
+    }
+
+    fn mouse_motion_event(&mut self, _ctx: &mut Context, x: f32, y: f32, _dx: f32, _dy: f32) -> GameResult {
+        if self.mouse_down {
+            let x = (x / CELL_SIZE as f32).floor() as i32;
+            let y = (y / CELL_SIZE as f32).floor() as i32;
+            if x >= 0 && x < X_SIZE_CELLS && y >= 0 && y < Y_SIZE_CELLS {
+                self.cells[y as usize][ x as usize] = true;
+            }
+        }
+        Ok(())
+    }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult {
         self.draw_grid(ctx)?;
@@ -136,23 +197,65 @@ impl EventHandler for GameOfLife {
     }
 }
 
-fn load_cells_from_file(path: &str) -> Vec<(i32, i32)> {
-    let file = std::fs::read_to_string(path).expect("Failed to read file");
-    let mut cells = vec![];
+fn load_cells_from_file(path: &str) -> Vec<Vec<bool>> {
+    let file = std::fs::read_to_string(path);
+    let mut cells = vec![vec![false; (X_SIZE_CELLS) as usize]; (Y_SIZE_CELLS) as usize];
     
-    if path.ends_with(".txt") {
-        for line in file.lines() {
-            let coords: Vec<i32> = line.split_whitespace()
-                .filter_map(|s| s.parse().ok())
-                .collect();
-            if coords.len() == 2 {
-                cells.push((coords[0], coords[1]));
+    match file {
+        Ok(content) => if path.ends_with(".txt") {
+            for line in content.lines() {
+                if line.starts_with('#') || line.is_empty() {
+                    continue; // Skip comments and empty lines
+                }
+                let coords: Vec<i32> = line.split_whitespace()
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
+                if coords.len() == 2 {
+                    cells[coords[0] as usize][coords[1] as usize] = true;
+                }
             }
+        } else if path.ends_with(".rle") {
+            let start_x = 50;
+            let start_y = 50;
+            // Handle RLE format
+            let mut x = start_x;
+            let mut y = start_y;
+            for line in content.lines() {
+                if line.starts_with('#') || line.is_empty() {
+                    continue; // Skip comments and empty lines
+                }
+                let mut multiplier = 1;
+                for c in line.chars() {
+                    match c {
+                        // dead cells
+                        'b' => x += multiplier,
+                        // living cells
+                        'o' => { 
+                            fill_cells(&mut cells, x, y, multiplier);
+                            x += multiplier;
+                        }
+                        '$' => {
+                            y += 1;
+                            x = start_x;
+                        }
+                        // an integer followed by 'b' or 'o'
+                        '0'..='9' => {
+                            multiplier = c.to_digit(10).unwrap() as i32;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        },
+        Err(_) => {
+            eprintln!("Error reading file: {}", path);
         }
-    } else if path.ends_with(".rle") { 
-        // custom life format
-        
-        
-    }
+    };
     cells
+}
+
+fn fill_cells(cells: &mut Vec<Vec<bool>>, x: i32, y: i32, len: i32) {
+    for i in 0..len {
+        cells[y as usize][(x + i) as usize] = true;
+    }
 }
